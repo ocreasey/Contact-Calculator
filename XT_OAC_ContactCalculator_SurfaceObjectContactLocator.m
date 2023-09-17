@@ -1,7 +1,7 @@
 %Surface Object Contact Locator
 
 %Written by Olivia Creasey, PhD student
-%This version written September 15, 2023
+%This version written September 15-17, 2023
 %Previous "Single Object Contact Calculator" versions written
 %July-September 2023
 
@@ -313,10 +313,13 @@ for PrimIter = 1:length(vPrimarySurface)
     ip.DistanceTransformChannel(vImarisDataSet, vNumberOfChannels, 1, false); %puts it in channel 2
     waitbar(1, vProgressDisplay);
     close(vProgressDisplay);
-
+    
+    %Set the working dataset to vImarisDataSet only after adding the
+    %distance transform channel to vImarisDataSet because (anecdotally) it 
+    %is computationally faster to edit datasets that are not the working
+    %dataset
     vImarisApplication.SetDataSet(vImarisDataSet);
-    
-    
+
     
     %Create a new folder object for new surfaces if requested by the user
     %Newsurfaces = vImarisApplication.GetFactory;
@@ -328,16 +331,15 @@ for PrimIter = 1:length(vPrimarySurface)
     if ismember(2,vPairMode)
         resultSmoothed = Newsurfaces.CreateDataContainer;
         resultSmoothed.SetName(sprintf('Smoothed Surfaces from %s',string(vPrimarySurfaceList{PrimIter})));
-    end
-    %result = Newsurfaces.CreateDataContainer;
-    %result.SetName(sprintf('Surfaces from %s',string(vPrimarySurfaceList{PrimIter})));
-    %vRGBA=[255,255,255, 0];%for yellow
-    %vRGBA = uint32(vRGBA * [1; 256; 256*256; 256*256*256]); % combine different components (four bytes) into one integer
-    
+    end    
     
     %Create a surface object containing the voxels at a distance of 1-1.5
     %voxel spacings from the outer surface of the Primary Surface
     vNewSurface = ip.DetectSurfacesWithUpperThreshold(vImarisDataSet,vROI,1,0,0,true,false,LowerThreshold,true,false,UpperThreshold,'');
+    %This is a really useful method for identifying the voxels of interest
+    %from a dataset stored as a channel in Imaris. If there are
+    %discontinuous regions, they will be recognized as disconnected
+    %components in the resulting surface object.
     
     vContactIntensityMatrix = zeros(vDataSize(1), vDataSize(2), vDataSize(3),'uint32');
     
@@ -387,10 +389,15 @@ for PrimIter = 1:length(vPrimarySurface)
     fprintf(fileID, strcat(filenameprep, '\r\n'));
     
     for b = 2:length(vChannelIntensityList)
+        %Start counting at 2 to ignore '0' voxels
         
         %For each contact, create a mask that will be used to generate
         %surfaces
+        %First, a mask of '1's
         vSecondaryContactMatrix = vContactIntensityMatrix == vChannelIntensityList(b);
+        %Next, a mask of '500's (this gives good results in our
+        %application, but may need to be tailored for another user's
+        %application)
         vSecondaryContactMatrixEstimated = vSecondaryContactMatrix*500;
   
         %This generates the ContactSurface which is the one we will use to
@@ -400,34 +407,36 @@ for PrimIter = 1:length(vPrimarySurface)
         %DataSet
         
         for vIndexZ = vStartZ:vEndZ
+            %Put the secondary contact matrix into a DataSet
             vMaskSurface.SetDataSliceFloats(vSecondaryContactMatrix(:,:,vIndexZ),vIndexZ-1,0,0);   
+            %Also put the 500 secondary contact matrix into a channel
             vImarisDataSet1.SetDataSliceFloats(vSecondaryContactMatrixEstimated(:,:,vIndexZ),vIndexZ-1,0,0);
         end
+
         
+        %Create an empty surface, and then add a surface object using a
+        %mask
+        %This approach allows us to create a surface object in which
+        %discontinuous surfaces are all "unified" into a single surface
+        %object, avoiding any concerns about disconnected components
         vContactSurface = vImarisApplication.GetFactory.CreateSurfaces();
-        vImarisApplication.GetFactory.ToSurfaces(vContactSurface);
-        vContactSurface.AddSurface(vMaskSurface,0); %To do this, mask values must be 1
+        vImarisApplication.GetFactory.ToSurfaces(vContactSurface);%To do this, mask values must be 1
+        vContactSurface.AddSurface(vMaskSurface,0); 
+
         
         if ismember(1,vPairMode)
             vContactSurface.SetName(sprintf('%s Unsmoothed Surface %s',string(vPrimarySurfaceList{PrimIter}),string(vChannelIntensityList(b))));
             vContactSurface.SetColorRGBA(vRGBA);
             resultUnsmoothed.AddChild(vContactSurface, -1);
-            %vImarisApplication.GetSurpassScene.AddChild(resultUnsmoothed, -1);
         end
         
-        %{
-        vContactSurface.SetName(sprintf('%s Unsmoothed Surface %s',string(vPrimarySurfaceList{PrimIter}),string(vChannelIntensityList(b))));
-        vContactSurface.SetColorRGBA(vRGBA);
-        %Add new surface to Surpass Scene
-        result.AddChild(vContactSurface, -1);
-        vImarisApplication.GetSurpassScene.AddChild(result, -1);
-        %}
         
-        
-        %This generates the EstimatedContactSurface which is the one we
+        %This generates the SmoothedContactSurface which is the one we
         %will use to calculate the number of disconnected contacts (in our
-        %test datasets with voxel size 0.1x0.1x0.1um, this detects contacts
-        %as disconnected if they are >~1um apart
+        %test datasets with voxel size 0.1x0.1x0.1um, this set of 
+        %parameters including the voxel intensity value of 500 detects 
+        %contacts as disconnected if they are >~1um apart but not if they
+        %are <1um apart
         vSmoothedContactSurface = ip.DetectSurfaces(vImarisDataSet1,vROI,0,2*MAXvoxelspacing,0,false,1,'');
         vContactSurfaceNumberOfContacts = vSmoothedContactSurface.GetNumberOfSurfaces();
         
@@ -435,16 +444,7 @@ for PrimIter = 1:length(vPrimarySurface)
             vSmoothedContactSurface.SetName(sprintf('%s Smoothed Surface %s',string(vPrimarySurfaceList{PrimIter}),string(vChannelIntensityList(b))));
             vSmoothedContactSurface.SetColorRGBA(vRGBA);
             resultSmoothed.AddChild(vSmoothedContactSurface, -1);
-            %vImarisApplication.GetSurpassScene.AddChild(resultSmoothed, -1);
-        end
-        
-        %{
-        vSmoothedContactSurface.SetName(sprintf('%s Smoothed Surface %s',string(vPrimarySurfaceList{PrimIter}),string(vChannelIntensityList(b))));
-        vSmoothedContactSurface.SetColorRGBA(vRGBA);
-        result.AddChild(vSmoothedContactSurface, -1);
-        vImarisApplication.GetSurpassScene.AddChild(result, -1);
-        %}
-        
+        end  
         
         vStatistics = vContactSurface.GetStatistics;
         vStatisticsNames = cell(vStatistics.mNames);
